@@ -1,12 +1,18 @@
-# v0.1.0-alpha
+# v0.2.0-alpha
 
-Experimental iPhone 6s iOS 16.2 port input validation for surrealra1n-N71,
-based on surrealra1n by pwnerblu. This alpha can identify N71AP, validate
-user-supplied IPSW metadata, and verify existing Stage 18U and Stage 18W
-reference exports and Stage 18U recovery files. It builds a reproducible host
-evidence ZIP with firmware input hashes and supports bounded diagnostic collection
-from paired iOS. Stage 18W remains untested on device. Firmware generation,
-installation, boot and cellular service are unavailable in this release.
+Experimental iPhone 6s iOS 16.2 port host tools, based on surrealra1n by pwnerblu.
+
+- Extract and verify the unmodified system DMGs from user-supplied iPadOS
+  `20C65` and native N71 `19G71` IPSWs.
+- Create a separate local Stage 18U recovery copy after matching the device ECID.
+  Verify full readback before recording success.
+- Report App Store links, vibration, cellular and camera limitations, with
+  distinct historical evidence for other functions.
+
+Stage 18W remains **Experimental / Not device-verified**. Ported firmware
+generation, device installation, device recovery, tethered boot and cellular
+service are unavailable in this release. Camera is partially working and
+captured photos are not saved to Photos.
 
 The N71 contribution contains original validation code, tests, and
 documentation. Its tests generate synthetic firmware metadata locally.

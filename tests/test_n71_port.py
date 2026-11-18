@@ -26,9 +26,10 @@ def firmware(path, identity, components, *, build=None, omit=None):
     version, real_build, product, board, bdid = identity
     common = {'ProductVersion': version, 'ProductBuildVersion': build or real_build,
               'SupportedProductTypes': [product]}
+    members = {name: ('system.dmg' if name == 'OS' else name + '.fixture') for name in components}
     metadata = {**common, 'BuildIdentities': [
         {'ApChipID': '0x8000', 'ApBoardID': hex(bdid), 'Info': {'DeviceClass': board},
-         'Manifest': {name: {'Info': {'Path': name + '.fixture'}} for name in components}}
+         'Manifest': {name: {'Info': {'Path': member}} for name, member in members.items()}}
     ]}
     restore = {**common, 'DeviceMap': [
         {'BoardConfig': board, 'Platform': 's8000', 'CPID': 0x8000, 'BDID': bdid}
@@ -36,9 +37,9 @@ def firmware(path, identity, components, *, build=None, omit=None):
     with zipfile.ZipFile(path, 'w') as archive:
         archive.writestr('BuildManifest.plist', plistlib.dumps(metadata))
         archive.writestr('Restore.plist', plistlib.dumps(restore))
-        for name in components:
+        for name, member in members.items():
             if name != omit:
-                archive.writestr(name + '.fixture', b'fixture')
+                archive.writestr(member, (board + ':' + name).encode())
 
 
 class ModeTests(unittest.TestCase):
@@ -226,6 +227,55 @@ class ModeTests(unittest.TestCase):
         self.assertEqual(receipt['steps']['crash_copy'], 'failed_exit_9')
         self.assertEqual(receipt['status'], 'partial_capture')
         self.assertTrue((dest / 'syslog.log').stat().st_size)
+
+    def test_extract_and_verify_stock_donors(self):
+        firmware(self.native, n71.NATIVE, (*self.native_members, 'OS'))
+        dest = self.folder / 'new donors'
+        prepare = ('prepare-donors', '--donor-ipsw', self.donor, '--native-ipsw',
+                   self.native, '--output', dest)
+        result = self.command(*prepare)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((dest / 'ipad-system.dmg').read_bytes(), b'j71sap:OS')
+        self.assertEqual((dest / 'iphone-system.dmg').read_bytes(), b'n71ap:OS')
+        self.assertEqual(self.command('verify-donors', dest).returncode, 0)
+        self.assertNotEqual(self.command(*prepare).returncode, 0)
+        (dest / 'iphone-system.dmg').write_bytes(b'x71ap:OS')
+        self.assertIn('readback SHA-256 differs', self.command('verify-donors', dest).stderr)
+
+    def test_missing_donor_os_creates_no_output(self):
+        dest = self.folder / 'new donors'
+        result = self.command('prepare-donors', '--donor-ipsw', self.donor,
+                              '--native-ipsw', self.native, '--output', dest)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('native IPSW: invalid OS member path', result.stderr)
+        self.assertFalse(dest.exists())
+
+    def test_recovery_copy_reads_back_and_removes_partial_writes(self):
+        files = {}
+        for label in n71.workspace.RECOVERY_NAMES:
+            data = label.encode()
+            (self.folder / label).write_bytes(data)
+            files[label] = {'local_name': label, 'size': len(data),
+                            'sha256': hashlib.sha256(data).hexdigest()}
+        receipt = {'device_identity': {'board': 'n71ap', 'product': 'iPhone8,1',
+                                       'chip': 0x8000, 'bdid': 4, 'ecid': 0x47},
+                   'files': files}
+        target = self.folder / 'new backup'
+        transfer = n71.workspace.transfer
+        def interrupt(source, path, size):
+            if path.name == 'cache.29':
+                raise OSError('simulated local write failure')
+            return transfer(source, path, size)
+        with patch.object(n71.workspace, 'transfer', side_effect=interrupt):
+            with self.assertRaisesRegex(OSError, 'simulated local write failure'):
+                n71.workspace.copy_recovery(self.folder, target, receipt)
+        self.assertFalse(target.exists())
+        expected = {key: (files[key]['sha256'], '') for key in ('05', '29')}
+        with patch.dict(n71.PROFILES, {'18u': ('test', expected)}):
+            n71.workspace.copy_recovery(self.folder, target, receipt)
+            self.assertTrue(n71.check_recovery(target, ecid=0x47)['device_ecid_matches'])
+            for label, name in n71.workspace.RECOVERY_NAMES.items():
+                self.assertEqual((target / name).read_bytes(), label.encode())
 
 
 if __name__ == '__main__':

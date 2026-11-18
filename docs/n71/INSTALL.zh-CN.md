@@ -30,12 +30,19 @@
 
 ## 生成主机验收包、检查恢复资料和采集日志
 
+- 用 `prepare-donors --donor-ipsw 文件 --native-ipsw 文件 --output 新目录`
+  提取两份未改动的系统 DMG。需约 10 GB 空间，使用 `verify-donors 目录`
+  复核产物。这两份镜像是共享供体材料，不能作为刷机包。
+
 - 在输入参数前添加 `build-bundle`，并用 `--output` 指定新的 ZIP 文件。
   产物包含两份完整 IPSW 的 SHA-256 与大小、Profile 及检查收据。
   用 `./surrealra1n.sh --n71-port verify-bundle 验收包.zip` 验证归档摘要。
 - `./surrealra1n.sh --n71-port recovery-check 备份目录 --probe` 会把
   实机 ECID 与备份收据比对。也可用 `--device-info` 读取已保存的查询。
   省略设备参数时只验证文件，不检查实机身份。
+- `copy-recovery 备份目录 --device-info 查询文件 --output 新目录` 核对 ECID
+  后生成独立的三份本地恢复副本并逐份读回。也可用 `--probe` 查实机身份。
+  任一步失败会清理未完成的输出；不会写手机。
 - `./surrealra1n.sh --n71-port collect-logs --output 私人输出目录 --seconds 10`
   对已配对且正在运行 iOS 的 N71AP 采集进程列表、syslog 和 CommCenter
   崩溃副本。需安装 libimobiledevice，且输出目录尚不存在。不删除手机上的
@@ -45,4 +52,6 @@ IPSW、缓存、个人备份、密钥、配对记录和设备日志应保存在�
 当前模式支持输入、设备身份及外部产物验证、主机验收包与设备日志。构建移植组件、设备刷写、
 实机恢复和 tethered boot 不可用。底层移植依赖 tethered boot 和
 Surreal16 系统卷；基带不可用，不适合日常使用。实机恢复可能失败并造成数据丢失。
+最新实机反馈是 App Store 链接不可用、振动不可用、相机部分可用但照片无法保存到
+系统相册。其他 Apple 服务未测试。前后摄、录像与慢动作的证据分别见功能状态。
 详见[英文说明](INSTALL.md)、[功能状态](STATUS.md)和[已知问题](KNOWN_ISSUES.md)。

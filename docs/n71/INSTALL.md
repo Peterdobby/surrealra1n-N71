@@ -36,6 +36,18 @@ or `--device-info /your/files/device-query.txt` to validate saved query output.
 Device identifiers unique to a handset are omitted from the JSON output.
 The result is printed to stdout. Errors go to stderr and return a nonzero code.
 
+### Prepare an offline donor workspace
+
+```sh
+./surrealra1n.sh --n71-port prepare-donors --donor-ipsw /your/files/ipad-16.2.ipsw --native-ipsw /your/files/iphone6s-15.6.ipsw --output /your/local/donor-workspace
+./surrealra1n.sh --n71-port verify-donors /your/local/donor-workspace
+```
+
+The output directory must be new. Allow about 10 GB of free space. Preparation
+streams the stock system DMG for each expected board and records both sizes and
+SHA-256 values after full readback. Neither image is patched. The output is
+shared donor material for both profiles, not an installation candidate.
+
 ### Build a host evidence archive
 
 Add `build-bundle` before the input flags and pass an unused ZIP path with
@@ -50,6 +62,7 @@ an installable firmware image.
 
 ```sh
 ./surrealra1n.sh --n71-port recovery-check /your/files/18u-backup --probe
+./surrealra1n.sh --n71-port copy-recovery /your/files/18u-backup --device-info /your/private/query.txt --output /your/private/new-backup
 ./surrealra1n.sh --n71-port collect-logs --output /your/private/path/n71-logs --seconds 10
 ```
 
@@ -57,6 +70,11 @@ an installable firmware image.
 evidence, it compares the ECID with the recovery receipt without printing it.
 Omit device options for a file-only check. This does not mount or verify live
 volumes or perform a restore.
+
+`copy-recovery` requires matching ECID evidence from `--probe` or `--device-info`.
+It copies three files and verifies every output before writing its local
+receipt. A failed copy removes the incomplete output directory. Keep both
+recovery copies and their private receipts outside the repository.
 
 Log capture needs `idevice_id`, `ideviceinfo`, `idevicesyslog` and
 `idevicecrashreport` from libimobiledevice and exactly one already paired
@@ -85,6 +103,7 @@ be new. Do not commit or publish raw logs.
 | Feature | Status |
 | --- | --- |
 | Device identity and IPSW checks | Implemented |
+| Stock donor workspace | Implemented; extraction and readback on the host |
 | Stage 18U / Stage 18W reference candidate and local backup verification | Implemented |
 | Stage 18U runtime | Booted in the original port; cellular service unavailable |
 | Stage 18W runtime | Untested on device / Experimental |
@@ -99,3 +118,8 @@ Baseband does not work. The port is unsuitable for daily use and actual
 restoration attempts may fail or cause data loss. No installation has been
 performed by the N71 mode. Upstream workflows are maintained by their original
 author.
+
+App Store links are reported unavailable; other Apple services are untested.
+Vibration and cellular service do not work. Camera works partially, and
+captured photos are not saved to Photos. See the [hardware status](STATUS.md#hardware-evidence)
+for front/rear camera, video, and other historical results.

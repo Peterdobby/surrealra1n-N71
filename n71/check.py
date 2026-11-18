@@ -13,6 +13,7 @@ import zipfile
 
 import host_bundle
 from diagnostics import capture
+import workspace
 
 TARGET = {'product': 'iPhone8,1', 'board': 'n71ap', 'cpid': 0x8000, 'bdid': 4}
 PROFILES = {
@@ -89,7 +90,7 @@ def archive_plist(archive, name):
     return result
 
 
-def check_ipsw(path, role, expected, components):
+def check_ipsw(path, role, expected, components, *, select_os=False):
     version, build, product, board, bdid = expected
     try:
         with zipfile.ZipFile(local_file(path, role)) as archive:
@@ -110,6 +111,7 @@ def check_ipsw(path, role, expected, components):
                           and number(row.get('ApChipID')) == TARGET['cpid']
                           and number(row.get('ApBoardID')) == bdid]
             require(identities, f'BuildManifest lacks {board} A9 identity')
+            images = set()
             for identity in identities:
                 for component in components:
                     member = identity.get('Manifest', {}).get(component, {}).get('Info', {}).get('Path')
@@ -123,11 +125,20 @@ def check_ipsw(path, role, expected, components):
                     require(entry.file_size > 0 and not entry.is_dir()
                             and not stat.S_ISLNK(entry.external_attr >> 16),
                             f'invalid {component} archive member')
+                    if select_os and component == 'OS':
+                        require(PurePosixPath(member).suffix == '.dmg', 'OS member must be a DMG')
+                        images.add((member, entry.file_size, entry.CRC))
+            if select_os:
+                require(len(images) == 1, 'expected the same OS member across matching identities')
+                member, size, crc = images.pop()
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError,
             zipfile.BadZipFile, plistlib.InvalidFileException) as exc:
         raise ValueError(f'{role} IPSW: {exc}') from exc
-    return {'product': product, 'board': board, 'version': version, 'build': build,
-            'matching_identities': len(identities), 'components_present': list(components)}
+    record = {'product': product, 'board': board, 'version': version, 'build': build,
+              'matching_identities': len(identities), 'components_present': list(components)}
+    if select_os:
+        record['os_image'] = {'member': member, 'size': size, 'crc32': crc}
+    return record
 
 
 def sha256(path):
@@ -156,8 +167,9 @@ def check_candidate(directory, profile):
             'files': {key: {'sha256': pair[0], 'cdhash': pair[1]} for key, pair in expected.items()}}
 
 
-def check_recovery(directory, *, ecid=None):
-    receipt = metadata_json(directory, 'recovery')
+def check_recovery(directory, *, ecid=None, receipt=None):
+    if receipt is None:
+        receipt = metadata_json(directory, 'recovery')
     identity = receipt.get('device_identity', {})
     require(receipt.get('schema') == 'n71-stage18w-recovery-export/v1'
             and receipt.get('baseline') == '18U'
@@ -253,19 +265,29 @@ def input_options(parser):
 def main():
     parser = argparse.ArgumentParser(prog='surrealra1n.sh --n71-port',
                                      description='iPhone 6s — iOS 16.2 Port (Experimental)',
-                                     epilog='Commands: build-bundle, verify-bundle, recovery-check, collect-logs. '
+                                     epilog='Commands: prepare-donors, verify-donors, copy-recovery, '
+                                     'build-bundle, verify-bundle, recovery-check, collect-logs. '
                                      'The original options continue to run input validation.')
     argv = sys.argv[1:]
     action = argv[0] if argv and argv[0] in (
-        'build-bundle', 'verify-bundle', 'recovery-check', 'collect-logs') else None
+        'build-bundle', 'verify-bundle', 'recovery-check', 'collect-logs',
+        'prepare-donors', 'verify-donors', 'copy-recovery') else None
     if action:
         parser.prog += ' ' + action
         argv = argv[1:]
     if action == 'verify-bundle':
         parser.add_argument('bundle', type=Path)
-    elif action == 'recovery-check':
+    elif action == 'prepare-donors':
+        parser.add_argument('--donor-ipsw', type=Path, required=True)
+        parser.add_argument('--native-ipsw', type=Path, required=True)
+        parser.add_argument('--output', type=Path, required=True)
+    elif action == 'verify-donors':
+        parser.add_argument('directory', type=Path)
+    elif action in ('recovery-check', 'copy-recovery'):
         parser.add_argument('recovery_dir', type=Path)
         add_device_options(parser)
+        if action == 'copy-recovery':
+            parser.add_argument('--output', type=Path, required=True)
     elif action == 'collect-logs':
         parser.add_argument('--output', type=Path, required=True)
         parser.add_argument('--seconds', type=int, default=10, choices=range(1, 61), metavar='1..60')
@@ -277,6 +299,19 @@ def main():
     try:
         if action == 'verify-bundle':
             result = host_bundle.verify(local_file(args.bundle, 'bundle'))
+        elif action == 'prepare-donors':
+            archives = {'donor': args.donor_ipsw, 'native': args.native_ipsw}
+            records = {role: check_ipsw(archives[role], role, expected, ('OS',), select_os=True)
+                       for role, expected in (('donor', DONOR), ('native', NATIVE))}
+            result = workspace.prepare_donors(args.output, archives, records)
+        elif action == 'verify-donors':
+            result = workspace.verify_donors(args.directory, metadata_json(args.directory, 'donors'))
+        elif action == 'copy-recovery':
+            _, ecid = device_info(args, bind_recovery=True)
+            require(ecid is not None, 'copy-recovery requires --probe or --device-info')
+            receipt = metadata_json(args.recovery_dir, 'recovery')
+            check_recovery(args.recovery_dir, ecid=ecid, receipt=receipt)
+            result = workspace.copy_recovery(args.recovery_dir, args.output, receipt)
         elif action == 'recovery-check':
             device, ecid = device_info(args, bind_recovery=True)
             result = {'device': device, **check_recovery(args.recovery_dir, ecid=ecid)}
@@ -291,7 +326,7 @@ def main():
                 sources = {role: {'sha256': sha256(path), 'size': path.stat().st_size}
                            for role, path in (('donor', args.donor_ipsw), ('native', args.native_ipsw))}
                 result = host_bundle.build(args.output, result, sources)
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, zipfile.BadZipFile) as exc:
         parser.exit(1, f'N71 port check: {exc}\n')
     print(json.dumps(result, indent=2))
     if action == 'collect-logs' and result['status'] != 'captured':
